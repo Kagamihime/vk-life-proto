@@ -98,7 +98,16 @@ fn main() {
 
     let mut grid_in = vec![0u8; (GRID_SIZE * GRID_SIZE * 4) as usize];
     for i in 0..12 {
-        grid_in[5 * GRID_SIZE as usize + i] = 255u8;
+        grid_in[1 * GRID_SIZE as usize * 4 + 0 * 4 + i] = 255u8;
+    }
+    for i in 0..4 {
+        grid_in[4 * GRID_SIZE as usize * 4 + 3 * 4 + i] = 255u8;
+    }
+    for i in 0..4 {
+        grid_in[5 * GRID_SIZE as usize * 4 + 3 * 4 + i] = 255u8;
+    }
+    for i in 0..4 {
+        grid_in[6 * GRID_SIZE as usize * 4 + 3 * 4 + i] = 255u8;
     }
 
     let buff_in =
