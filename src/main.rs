@@ -161,7 +161,7 @@ fn main() {
         .copy_buffer_to_image(buff_in.clone(), image_in.clone())
         .unwrap()
         .dispatch(
-            [GRID_SIZE / 8, GRID_SIZE / 8, 1],
+            [(GRID_SIZE as f64 / 8.0).ceil() as u32, (GRID_SIZE as f64 / 8.0).ceil() as u32, 1],
             compute_pipeline.clone(),
             set.clone(),
             (),
