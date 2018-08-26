@@ -25,6 +25,8 @@ use vulkano::instance::PhysicalDeviceType::DiscreteGpu;
 use vulkano::pipeline::ComputePipeline;
 use vulkano::sync::GpuFuture;
 
+const GRID_SIZE: u32 = 16;
+
 mod ngs {
     #[derive(VulkanoShader)]
     #[ty = "compute"]
@@ -94,9 +96,9 @@ fn main() {
 
     let queue = queues.next().unwrap();
 
-    let mut grid_in = vec![0u8; 1024 * 1024 * 4];
-    for i in 0 .. 16 {
-        grid_in[5 * 1024 * 4 + 5 + i] = 255u8;
+    let mut grid_in = vec![0u8; (GRID_SIZE * GRID_SIZE * 4) as usize];
+    for i in 0..12 {
+        grid_in[5 * GRID_SIZE as usize + i] = 255u8;
     }
 
     let buff_in =
@@ -106,8 +108,8 @@ fn main() {
     let image_in = StorageImage::new(
         device.clone(),
         Dimensions::Dim2d {
-            width: 1024,
-            height: 1024,
+            width: GRID_SIZE,
+            height: GRID_SIZE,
         },
         Format::R8G8B8A8Unorm,
         Some(queue.family()),
@@ -116,8 +118,8 @@ fn main() {
     let image_out = StorageImage::new(
         device.clone(),
         Dimensions::Dim2d {
-            width: 1024,
-            height: 1024,
+            width: GRID_SIZE,
+            height: GRID_SIZE,
         },
         Format::R8G8B8A8Unorm,
         Some(queue.family()),
@@ -126,7 +128,7 @@ fn main() {
     let buff_out = CpuAccessibleBuffer::from_iter(
         device.clone(),
         BufferUsage::all(),
-        (0..1024 * 1024 * 4).map(|_| 0u8),
+        (0..GRID_SIZE * GRID_SIZE * 4).map(|_| 0u8),
     ).expect("failed to create buffer");
 
     let shader = ngs::Shader::load(device.clone()).expect("failed to create shader module");
@@ -150,7 +152,7 @@ fn main() {
         .copy_buffer_to_image(buff_in.clone(), image_in.clone())
         .unwrap()
         .dispatch(
-            [1024 / 8, 1024 / 8, 1],
+            [GRID_SIZE / 8, GRID_SIZE / 8, 1],
             compute_pipeline.clone(),
             set.clone(),
             (),
@@ -169,10 +171,12 @@ fn main() {
         .unwrap();
 
     let input_content = buff_in.read().unwrap();
-    let input = ImageBuffer::<Rgba<u8>, _>::from_raw(1024, 1024, &input_content[..]).unwrap();
+    let input =
+        ImageBuffer::<Rgba<u8>, _>::from_raw(GRID_SIZE, GRID_SIZE, &input_content[..]).unwrap();
     input.save("input.png").unwrap();
 
     let output_content = buff_out.read().unwrap();
-    let output = ImageBuffer::<Rgba<u8>, _>::from_raw(1024, 1024, &output_content[..]).unwrap();
+    let output =
+        ImageBuffer::<Rgba<u8>, _>::from_raw(GRID_SIZE, GRID_SIZE, &output_content[..]).unwrap();
     output.save("output.png").unwrap();
 }
