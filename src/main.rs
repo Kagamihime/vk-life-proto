@@ -48,8 +48,8 @@ mod ngs {
         for (int i = 0; i < 8; i++) {
             ivec2 access_coord = ivec2(gl_GlobalInvocationID.xy) + offsets[i];
 
-            if (access_coord.x > 0 && access_coord.x <= grid_size.x && access_coord.y > 0 &&
-                access_coord.y <= grid_size.y) {
+            if (access_coord.x >= 0 && access_coord.x < grid_size.x && access_coord.y >= 0 &&
+                access_coord.y < grid_size.y) {
                 if (imageLoad(img_in, access_coord) == vec4(1.0, 1.0, 1.0, 1.0)) {
                     living_neighbors++;
                 }
