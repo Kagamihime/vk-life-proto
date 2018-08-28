@@ -39,6 +39,10 @@ mod ngs {
 
     layout(set = 0, binding = 1, rgba8) uniform writeonly image2D img_out;
 
+    layout(set = 0, binding = 2) buffer Toroidal {
+        int opt;
+    } tor;
+
     void main() {
         ivec2 offsets[8] = { ivec2(-1, -1), ivec2(0, -1), ivec2(1, -1), ivec2(-1, 0), ivec2(1, 0),
                              ivec2(-1, 1), ivec2(0, 1), ivec2(1, 1) };
@@ -47,6 +51,21 @@ mod ngs {
 
         for (int i = 0; i < 8; i++) {
             ivec2 access_coord = ivec2(gl_GlobalInvocationID.xy) + offsets[i];
+
+            if (tor.opt != 0) {
+                if (access_coord.x == -1) {
+                    access_coord.x = grid_size.x - 1;
+                }
+                if (access_coord.y == -1) {
+                    access_coord.y = grid_size.y - 1;
+                }
+                if (access_coord.x == grid_size.x) {
+                    access_coord.x = 0;
+                }
+                if (access_coord.y == grid_size.y) {
+                    access_coord.y = 0;
+                }
+            }
 
             if (access_coord.x >= 0 && access_coord.x < grid_size.x && access_coord.y >= 0 &&
                 access_coord.y < grid_size.y) {
@@ -98,7 +117,7 @@ fn main() {
 
     let mut grid_in = vec![0u8; (GRID_SIZE * GRID_SIZE * 4) as usize];
     for i in 0..12 {
-        grid_in[1 * GRID_SIZE as usize * 4 + 0 * 4 + i] = 255u8;
+        grid_in[0 * GRID_SIZE as usize * 4 + 0 * 4 + i] = 255u8;
     }
     for i in 0..4 {
         grid_in[4 * GRID_SIZE as usize * 4 + 3 * 4 + i] = 255u8;
@@ -140,6 +159,11 @@ fn main() {
         (0..GRID_SIZE * GRID_SIZE * 4).map(|_| 0u8),
     ).expect("failed to create buffer");
 
+    let toroidal_opt = 1;
+    let toroidal_buff =
+        CpuAccessibleBuffer::from_data(device.clone(), BufferUsage::all(), toroidal_opt)
+            .expect("failed to create buffer");
+
     let shader = ngs::Shader::load(device.clone()).expect("failed to create shader module");
     let compute_pipeline = Arc::new(
         ComputePipeline::new(device.clone(), &shader.main_entry_point(), &())
@@ -152,6 +176,8 @@ fn main() {
             .unwrap()
             .add_image(image_out.clone())
             .unwrap()
+            .add_buffer(toroidal_buff.clone())
+            .unwrap()
             .build()
             .unwrap(),
     );
@@ -161,7 +187,11 @@ fn main() {
         .copy_buffer_to_image(buff_in.clone(), image_in.clone())
         .unwrap()
         .dispatch(
-            [(GRID_SIZE as f64 / 8.0).ceil() as u32, (GRID_SIZE as f64 / 8.0).ceil() as u32, 1],
+            [
+                (GRID_SIZE as f64 / 8.0).ceil() as u32,
+                (GRID_SIZE as f64 / 8.0).ceil() as u32,
+                1,
+            ],
             compute_pipeline.clone(),
             set.clone(),
             (),
