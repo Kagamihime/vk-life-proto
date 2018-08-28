@@ -43,6 +43,14 @@ mod ngs {
         int opt;
     } tor;
 
+    layout(set = 0, binding = 3) buffer Survival {
+        uint rules[];
+    } srvl;
+
+    layout(set = 0, binding = 4) buffer Birth {
+        uint rules[];
+    } brth;
+
     void main() {
         ivec2 offsets[8] = { ivec2(-1, -1), ivec2(0, -1), ivec2(1, -1), ivec2(-1, 0), ivec2(1, 0),
                              ivec2(-1, 1), ivec2(0, 1), ivec2(1, 1) };
@@ -75,19 +83,23 @@ mod ngs {
             }
         }
 
+        vec4 to_write = vec4(0.0, 0.0, 0.0, 0.0);
+
         if (imageLoad(img_in, ivec2(gl_GlobalInvocationID.xy)) == vec4(1.0, 1.0, 1.0, 1.0)) {
-            if (living_neighbors == 2 || living_neighbors == 3) {
-                imageStore(img_out, ivec2(gl_GlobalInvocationID.xy), vec4(1.0, 1.0, 1.0, 1.0));
-            } else {
-                imageStore(img_out, ivec2(gl_GlobalInvocationID.xy), vec4(0.0, 0.0, 0.0, 0.0));
+            for (int i = 0; i < srvl.rules.length(); i++) {
+                if (living_neighbors == srvl.rules[i]) {
+                    to_write = vec4(1.0, 1.0, 1.0, 1.0);
+                }
             }
         } else {
-            if (living_neighbors == 3) {
-                imageStore(img_out, ivec2(gl_GlobalInvocationID.xy), vec4(1.0, 1.0, 1.0, 1.0));
-            } else {
-                imageStore(img_out, ivec2(gl_GlobalInvocationID.xy), vec4(0.0, 0.0, 0.0, 0.0));
+            for (int i = 0; i < brth.rules.length(); i++) {
+                if (living_neighbors == brth.rules[i]) {
+                    to_write = vec4(1.0, 1.0, 1.0, 1.0);
+                }
             }
         }
+
+        imageStore(img_out, ivec2(gl_GlobalInvocationID.xy), to_write);
     }
     "]
     struct Dummy;
@@ -164,6 +176,18 @@ fn main() {
         CpuAccessibleBuffer::from_data(device.clone(), BufferUsage::all(), toroidal_opt)
             .expect("failed to create buffer");
 
+    let survival_opt: Vec<u32> = vec![2, 3];
+    let survival_buff = CpuAccessibleBuffer::from_iter(
+        device.clone(),
+        BufferUsage::all(),
+        survival_opt.into_iter(),
+    ).expect("failed to create buffer");
+
+    let birth_opt: Vec<u32> = vec![3];
+    let birth_buff =
+        CpuAccessibleBuffer::from_iter(device.clone(), BufferUsage::all(), birth_opt.into_iter())
+            .expect("failed to create buffer");
+
     let shader = ngs::Shader::load(device.clone()).expect("failed to create shader module");
     let compute_pipeline = Arc::new(
         ComputePipeline::new(device.clone(), &shader.main_entry_point(), &())
@@ -177,6 +201,10 @@ fn main() {
             .add_image(image_out.clone())
             .unwrap()
             .add_buffer(toroidal_buff.clone())
+            .unwrap()
+            .add_buffer(survival_buff.clone())
+            .unwrap()
+            .add_buffer(birth_buff.clone())
             .unwrap()
             .build()
             .unwrap(),
