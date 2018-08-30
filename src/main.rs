@@ -105,6 +105,36 @@ mod ngs {
     struct Dummy;
 }
 
+mod fms {
+    #[derive(VulkanoShader)]
+    #[ty = "compute"]
+    #[src = "
+    #version 450
+
+    layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+    layout(set = 0, binding = 0, rgba8) uniform readonly image2D img;
+
+    layout(set = 0, binding = 1) buffer FlatMapX {
+        int data[];
+    } fmx;
+
+    layout(set = 0, binding = 2) buffer FlatMapY {
+        int data[];
+    } fmy;
+
+    void main() {
+        ivec2 access_coord = ivec2(gl_GlobalInvocationID.xy);
+
+        if (imageLoad(img, access_coord) == vec4(1.0, 1.0, 1.0, 1.0)) {
+            fmx.data[access_coord.x] = 1;
+            fmy.data[access_coord.y] = 1;
+        }
+    }
+    "]
+    struct Dummy;
+}
+
 fn main() {
     let instance =
         Instance::new(None, &InstanceExtensions::none(), None).expect("failed to create instance");
@@ -144,6 +174,8 @@ fn main() {
     let buff_in =
         CpuAccessibleBuffer::from_iter(device.clone(), BufferUsage::all(), grid_in.into_iter())
             .expect("failed to create buffer");
+
+    recenter_pattern(device.clone(), queue.clone(), buff_in.clone());
 
     let image_in = StorageImage::new(
         device.clone(),
@@ -246,4 +278,186 @@ fn main() {
     let output =
         ImageBuffer::<Rgba<u8>, _>::from_raw(GRID_SIZE, GRID_SIZE, &output_content[..]).unwrap();
     output.save("output.png").unwrap();
+}
+
+fn compute_pattern_boundaries(
+    device: Arc<Device>,
+    queue: Arc<vulkano::device::Queue>,
+    grid_buff: Arc<CpuAccessibleBuffer<[u8]>>,
+) -> (Option<usize>, Option<usize>, Option<usize>, Option<usize>) {
+    let grid_img = StorageImage::new(
+        device.clone(),
+        Dimensions::Dim2d {
+            width: GRID_SIZE,
+            height: GRID_SIZE,
+        },
+        Format::R8G8B8A8Unorm,
+        Some(queue.family()),
+    ).expect("failed to create image");
+
+    let flat_map_x = CpuAccessibleBuffer::from_iter(
+        device.clone(),
+        BufferUsage::all(),
+        (0..GRID_SIZE).map(|_| 0),
+    ).expect("failed to create buffer");
+
+    let flat_map_y = CpuAccessibleBuffer::from_iter(
+        device.clone(),
+        BufferUsage::all(),
+        (0..GRID_SIZE).map(|_| 0),
+    ).expect("failed to create buffer");
+
+    let shader = fms::Shader::load(device.clone()).expect("failed to create shader module");
+    let compute_pipeline = Arc::new(
+        ComputePipeline::new(device.clone(), &shader.main_entry_point(), &())
+            .expect("failed to create compute pipeline"),
+    );
+
+    let set = Arc::new(
+        PersistentDescriptorSet::start(compute_pipeline.clone(), 0)
+            .add_image(grid_img.clone())
+            .unwrap()
+            .add_buffer(flat_map_x.clone())
+            .unwrap()
+            .add_buffer(flat_map_y.clone())
+            .unwrap()
+            .build()
+            .unwrap(),
+    );
+
+    let command_buffer = AutoCommandBufferBuilder::new(device.clone(), queue.family())
+        .unwrap()
+        .copy_buffer_to_image(grid_buff.clone(), grid_img.clone())
+        .unwrap()
+        .dispatch(
+            [
+                (GRID_SIZE as f64 / 8.0).ceil() as u32,
+                (GRID_SIZE as f64 / 8.0).ceil() as u32,
+                1,
+            ],
+            compute_pipeline.clone(),
+            set.clone(),
+            (),
+        )
+        .unwrap()
+        .build()
+        .unwrap();
+
+    let finished = command_buffer.execute(queue.clone()).unwrap();
+    finished
+        .then_signal_fence_and_flush()
+        .unwrap()
+        .wait(None)
+        .unwrap();
+
+    let min_x = flat_map_x.read().unwrap().iter().position(|&n| n > 0);
+    let max_x = flat_map_x.read().unwrap().iter().rposition(|&n| n > 0);
+
+    let min_y = flat_map_y.read().unwrap().iter().position(|&n| n > 0);
+    let max_y = flat_map_y.read().unwrap().iter().rposition(|&n| n > 0);
+
+    (min_x, max_x, min_y, max_y)
+}
+
+fn recenter_pattern(
+    device: Arc<Device>,
+    queue: Arc<vulkano::device::Queue>,
+    grid_buff: Arc<CpuAccessibleBuffer<[u8]>>,
+) {
+    let (min_x, max_x, min_y, max_y) =
+        compute_pattern_boundaries(device.clone(), queue.clone(), grid_buff.clone());
+
+    if min_x.is_none() || max_x.is_none() || min_y.is_none() || max_y.is_none() {
+        return;
+    }
+
+    let (min_x, max_x, min_y, max_y) = (
+        min_x.unwrap(),
+        max_x.unwrap(),
+        min_y.unwrap(),
+        max_y.unwrap(),
+    );
+
+    let pattern_origin = (min_x as i32, min_y as i32);
+    let pattern_size = ((max_x - min_x + 1) as u32, (max_y - min_y + 1) as u32);
+
+    let grid_img = StorageImage::new(
+        device.clone(),
+        Dimensions::Dim2d {
+            width: GRID_SIZE,
+            height: GRID_SIZE,
+        },
+        Format::R8G8B8A8Unorm,
+        Some(queue.family()),
+    ).expect("failed to create image");
+
+    let centered_img = StorageImage::new(
+        device.clone(),
+        Dimensions::Dim2d {
+            width: pattern_size.0 + 2,
+            height: pattern_size.1 + 2,
+        },
+        Format::R8G8B8A8Unorm,
+        Some(queue.family()),
+    ).expect("failed to create image");
+
+    let centered_buff = CpuAccessibleBuffer::from_iter(
+        device.clone(),
+        BufferUsage::all(),
+        (0..(pattern_size.0 + 2) * (pattern_size.1 + 2) * 4).map(|_| 0u8),
+    ).expect("failed to create buffer");
+
+    let command_buffer = AutoCommandBufferBuilder::new(device.clone(), queue.family())
+        .unwrap()
+        .clear_color_image(
+            centered_img.clone(),
+            vulkano::format::ClearValue::Float([0.0, 0.0, 0.0, 0.0]),
+        )
+        .unwrap()
+        .build()
+        .unwrap();
+
+    let finished = command_buffer.execute(queue.clone()).unwrap();
+    finished
+        .then_signal_fence_and_flush()
+        .unwrap()
+        .wait(None)
+        .unwrap();
+
+    let command_buffer = AutoCommandBufferBuilder::new(device.clone(), queue.family())
+        .unwrap()
+        .copy_buffer_to_image(grid_buff.clone(), grid_img.clone())
+        .unwrap()
+        .copy_image(
+            grid_img.clone(),
+            [pattern_origin.0, pattern_origin.1, 0],
+            0,
+            0,
+            centered_img.clone(),
+            [1, 1, 0],
+            0,
+            0,
+            [pattern_size.0, pattern_size.1, 1],
+            1,
+        )
+        .unwrap()
+        .copy_image_to_buffer(centered_img.clone(), centered_buff.clone())
+        .unwrap()
+        .build()
+        .unwrap();
+
+    let finished = command_buffer.execute(queue.clone()).unwrap();
+    finished
+        .then_signal_fence_and_flush()
+        .unwrap()
+        .wait(None)
+        .unwrap();
+
+    let centered_content = centered_buff.read().unwrap();
+    let output = ImageBuffer::<Rgba<u8>, _>::from_raw(
+        (pattern_size.0 + 2) as u32,
+        (pattern_size.1 + 2) as u32,
+        &centered_content[..],
+    ).unwrap();
+    output.save("centered.png").unwrap();
 }
