@@ -3,7 +3,7 @@ extern crate image;
 extern crate vulkano_shader_derive;
 extern crate vulkano;
 
-use image::{ImageBuffer, Rgba};
+use image::{ImageBuffer, Luma};
 
 use std::sync::Arc;
 
@@ -35,9 +35,9 @@ mod ngs {
 
     layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
-    layout(set = 0, binding = 0, rgba8) uniform readonly image2D img_in;
+    layout(set = 0, binding = 0, r8) uniform readonly image2D img_in;
 
-    layout(set = 0, binding = 1, rgba8) uniform writeonly image2D img_out;
+    layout(set = 0, binding = 1, r8) uniform writeonly image2D img_out;
 
     layout(set = 0, binding = 2) buffer Toroidal {
         int opt;
@@ -77,24 +77,24 @@ mod ngs {
 
             if (access_coord.x >= 0 && access_coord.x < grid_size.x && access_coord.y >= 0 &&
                 access_coord.y < grid_size.y) {
-                if (imageLoad(img_in, access_coord) == vec4(1.0, 1.0, 1.0, 1.0)) {
+                if (imageLoad(img_in, access_coord).x == 1.0) {
                     living_neighbors++;
                 }
             }
         }
 
-        vec4 to_write = vec4(0.0, 0.0, 0.0, 0.0);
+        vec4 to_write = vec4(0.0);
 
-        if (imageLoad(img_in, ivec2(gl_GlobalInvocationID.xy)) == vec4(1.0, 1.0, 1.0, 1.0)) {
+        if (imageLoad(img_in, ivec2(gl_GlobalInvocationID.xy)).x == 1.0) {
             for (int i = 0; i < srvl.rules.length(); i++) {
                 if (living_neighbors == srvl.rules[i]) {
-                    to_write = vec4(1.0, 1.0, 1.0, 1.0);
+                    to_write.x = 1.0;
                 }
             }
         } else {
             for (int i = 0; i < brth.rules.length(); i++) {
                 if (living_neighbors == brth.rules[i]) {
-                    to_write = vec4(1.0, 1.0, 1.0, 1.0);
+                    to_write.x = 1.0;
                 }
             }
         }
@@ -113,7 +113,7 @@ mod fms {
 
     layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
-    layout(set = 0, binding = 0, rgba8) uniform readonly image2D img;
+    layout(set = 0, binding = 0, r8) uniform readonly image2D img;
 
     layout(set = 0, binding = 1) buffer FlatMapX {
         int data[];
@@ -126,7 +126,7 @@ mod fms {
     void main() {
         ivec2 access_coord = ivec2(gl_GlobalInvocationID.xy);
 
-        if (imageLoad(img, access_coord) == vec4(1.0, 1.0, 1.0, 1.0)) {
+        if (imageLoad(img, access_coord).x == 1.0) {
             fmx.data[access_coord.x] = 1;
             fmy.data[access_coord.y] = 1;
         }
@@ -148,27 +148,26 @@ fn main() {
         .find(|&q| q.supports_graphics())
         .expect("couldn't find a graphical queue family");
 
+    let img_extended_formats_feature = Features {
+        shader_storage_image_extended_formats: true,
+        ..Features::none()
+    };
+
     let (device, mut queues) = Device::new(
         physical,
-        &Features::none(),
+        &img_extended_formats_feature,
         &DeviceExtensions::none(),
         [(queue_family, 0.5)].iter().cloned(),
     ).expect("failed to create device");
 
     let queue = queues.next().unwrap();
 
-    let mut grid_in = vec![0u8; (GRID_SIZE * GRID_SIZE * 4) as usize];
-    for i in 0..12 {
-        grid_in[0 * GRID_SIZE as usize * 4 + 0 * 4 + i] = 255u8;
+    let mut grid_in = vec![0u8; (GRID_SIZE * GRID_SIZE) as usize];
+    for i in 0..3 {
+        grid_in[0 * GRID_SIZE as usize + 0 + i] = 255u8;
     }
-    for i in 0..4 {
-        grid_in[4 * GRID_SIZE as usize * 4 + 3 * 4 + i] = 255u8;
-    }
-    for i in 0..4 {
-        grid_in[5 * GRID_SIZE as usize * 4 + 3 * 4 + i] = 255u8;
-    }
-    for i in 0..4 {
-        grid_in[6 * GRID_SIZE as usize * 4 + 3 * 4 + i] = 255u8;
+    for j in 0..3 {
+        grid_in[(4 + j) * GRID_SIZE as usize + 3] = 255u8;
     }
 
     let buff_in =
@@ -183,7 +182,7 @@ fn main() {
             width: GRID_SIZE,
             height: GRID_SIZE,
         },
-        Format::R8G8B8A8Unorm,
+        Format::R8Unorm,
         Some(queue.family()),
     ).expect("failed to create image");
 
@@ -193,14 +192,14 @@ fn main() {
             width: GRID_SIZE,
             height: GRID_SIZE,
         },
-        Format::R8G8B8A8Unorm,
+        Format::R8Unorm,
         Some(queue.family()),
     ).expect("failed to create image");
 
     let buff_out = CpuAccessibleBuffer::from_iter(
         device.clone(),
         BufferUsage::all(),
-        (0..GRID_SIZE * GRID_SIZE * 4).map(|_| 0u8),
+        (0..GRID_SIZE * GRID_SIZE).map(|_| 0u8),
     ).expect("failed to create buffer");
 
     let toroidal_opt = 1;
@@ -271,12 +270,12 @@ fn main() {
 
     let input_content = buff_in.read().unwrap();
     let input =
-        ImageBuffer::<Rgba<u8>, _>::from_raw(GRID_SIZE, GRID_SIZE, &input_content[..]).unwrap();
+        ImageBuffer::<Luma<u8>, _>::from_raw(GRID_SIZE, GRID_SIZE, &input_content[..]).unwrap();
     input.save("input.png").unwrap();
 
     let output_content = buff_out.read().unwrap();
     let output =
-        ImageBuffer::<Rgba<u8>, _>::from_raw(GRID_SIZE, GRID_SIZE, &output_content[..]).unwrap();
+        ImageBuffer::<Luma<u8>, _>::from_raw(GRID_SIZE, GRID_SIZE, &output_content[..]).unwrap();
     output.save("output.png").unwrap();
 }
 
@@ -291,7 +290,7 @@ fn compute_pattern_boundaries(
             width: GRID_SIZE,
             height: GRID_SIZE,
         },
-        Format::R8G8B8A8Unorm,
+        Format::R8Unorm,
         Some(queue.family()),
     ).expect("failed to create image");
 
@@ -387,7 +386,7 @@ fn recenter_pattern(
             width: GRID_SIZE,
             height: GRID_SIZE,
         },
-        Format::R8G8B8A8Unorm,
+        Format::R8Unorm,
         Some(queue.family()),
     ).expect("failed to create image");
 
@@ -397,14 +396,14 @@ fn recenter_pattern(
             width: pattern_size.0 + 2,
             height: pattern_size.1 + 2,
         },
-        Format::R8G8B8A8Unorm,
+        Format::R8Unorm,
         Some(queue.family()),
     ).expect("failed to create image");
 
     let centered_buff = CpuAccessibleBuffer::from_iter(
         device.clone(),
         BufferUsage::all(),
-        (0..(pattern_size.0 + 2) * (pattern_size.1 + 2) * 4).map(|_| 0u8),
+        (0..(pattern_size.0 + 2) * (pattern_size.1 + 2)).map(|_| 0u8),
     ).expect("failed to create buffer");
 
     let command_buffer = AutoCommandBufferBuilder::new(device.clone(), queue.family())
@@ -454,7 +453,7 @@ fn recenter_pattern(
         .unwrap();
 
     let centered_content = centered_buff.read().unwrap();
-    let output = ImageBuffer::<Rgba<u8>, _>::from_raw(
+    let output = ImageBuffer::<Luma<u8>, _>::from_raw(
         (pattern_size.0 + 2) as u32,
         (pattern_size.1 + 2) as u32,
         &centered_content[..],
